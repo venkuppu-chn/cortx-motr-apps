@@ -33,6 +33,55 @@
 #include "c0appz.h"
 #include "c0appz_internal.h"
 
+
+struct Block {
+	uint64_t idh;	/* object id high    	*/
+	uint64_t idl;   /* object is low     	*/
+	uint64_t bsz;   /* block size        	*/
+	uint64_t cnt;  	/* count             	*/
+	uint64_t m0bs;	/* m0 block size     	*/
+	uint64_t pos;   /* starting position 	*/
+	char    *fbuf;  /* file buffer     		*/
+};
+
+/* threads */
+pthread_t wthrd[512];			/* max 512 threads */
+struct Block wthrd_blk[512];	/* max 512 threads */
+
+static void *tfunc_c0appz_mr(void *block)
+{
+	struct Block *b = (struct Block *)block;
+	/*
+	printf("pos = %" PRIu64 "\n", b->pos);
+	printf("idh = %" PRIu64 "\n", b->idh);
+	printf("idl = %" PRIu64 "\n", b->idl);
+	*/
+	c0appz_mr(b->fbuf, b->idh, b->idl, b->pos, b->bsz, b->cnt, b->m0bs);
+    return NULL;
+}
+
+void pack(int idx, char *fbuf, uint64_t idh, uint64_t idl, uint64_t pos,
+		uint64_t bsz, uint64_t cnt, uint64_t m0bs)
+{
+	wthrd_blk[idx].idh = idh;
+	wthrd_blk[idx].idl = idl;
+	wthrd_blk[idx].pos = pos;
+	wthrd_blk[idx].bsz = bsz;
+	wthrd_blk[idx].cnt = cnt;
+	wthrd_blk[idx].m0bs = m0bs;
+	wthrd_blk[idx].fbuf = (char *)fbuf;
+	/*
+	printf("\n#####\n");
+	printf("idh = %" PRIu64 "\n", wthrd_blk[idx].idh);
+	printf("idl = %" PRIu64 "\n", wthrd_blk[idx].idl);
+	printf("pos = %" PRIu64 "\n", wthrd_blk[idx].pos);
+	printf("bsz = %" PRIu64 "\n", wthrd_blk[idx].bsz);
+	printf("cnt = %" PRIu64 "\n", wthrd_blk[idx].cnt);
+	*/
+	return;
+}
+
+
 /*
  ******************************************************************************
  * EXTERN VARIABLES
@@ -67,6 +116,7 @@ fsz - file size (in bytes)\n\
   -p      show performance stats\n\
   -t      create m0trace.pid file\n\
   -v      be more verbose\n\
+  -i | n socket index, [0-3] currently\n\
   -h      print this help\n\
 \n\
 Note: in order to get the maximum performance, m0bs should be multiple\n\
@@ -81,24 +131,28 @@ int help()
 
 int main(int argc, char **argv)
 {
-	uint64_t idh;	/* object id high		*/
-	uint64_t idl;   /* object id low  		*/
-	uint64_t bsz;   /* block size     		*/
-	uint64_t m0bs=0; /* m0 block size     		*/
-	uint64_t cnt;   /* count          		*/
-	uint64_t pos;	/* starting position	*/
-	uint64_t fsz;   /* file size			*/
-	char *fname;	/* output filename 		*/
-	char *fbuf=NULL;/* file buffer			*/
-	int opt=0;		/* options				*/
-	int cont=0; 	/* continuous mode 		*/
-	int laps=0;		/* number of reads		*/
-	int rc=0;		/* return code			*/
+	uint64_t idh;		/* object id high		*/
+	uint64_t idl;   	/* object id low  		*/
+	uint64_t bsz;   	/* block size     		*/
+	uint64_t cnt;   	/* count          		*/
+	uint64_t pos;		/* starting position	*/
+	uint64_t fsz;   	/* file size			*/
+	char *fname;		/* output filename 		*/
+	char *fbuf=NULL;	/* file buffer			*/
+	int opt=0;			/* options				*/
+	int cont=0; 		/* continuous mode 		*/
+	int laps=0;			/* number of reads		*/
+	int rc=0;			/* return code			*/
+	uint64_t m0bs=0;	/* m0 block size    	*/
+	int	mthrd=0;	 	/* multi-threaded 	  	*/
+	int idx=0;			/* socket index			*/
+
+	int i;
 
 	prog = basename(strdup(argv[0]));
 
 	/* getopt */
-	while ((opt = getopt(argc, argv, ":b:pc:tvh")) != -1) {
+	while ((opt = getopt(argc, argv, ":i:b:pmc:tvh")) != -1) {
 		switch(opt){
 		case 'b':
 			if (sscanf(optarg, "%li", &m0bs) != 1) {
@@ -117,11 +171,22 @@ int main(int argc, char **argv)
 			if(cont<0) cont=0;
 			if(!cont) help();
 			break;
+		case 'm':
+			mthrd = 1;
+			break;
 		case 't':
 			m0trace_on = true;
 			break;
 		case 'v':
 			trace_level++;
+			break;
+		case 'i':
+			idx = atoi(optarg);
+			if (idx < 0 || idx > 3) {
+				ERR("invalid socket index: %s (allowed \n"
+				    "values are 0, 1, 2, or 3 atm)\n", optarg);
+				help();
+			}
 			break;
 		case 'h':
 			help();
@@ -183,7 +248,7 @@ int main(int argc, char **argv)
 
 	/* init */
 	c0appz_timein();
-	rc = c0appz_init(0);
+	rc = c0appz_init(idx);
 	if (rc != 0) {
 		fprintf(stderr,"error! c0appz_init() failed: %d\n", rc);
 		return 222;
@@ -228,15 +293,30 @@ int main(int argc, char **argv)
 		qos_laps_remain=laps;
 		qos_pthread_start();
 		c0appz_timein();
-		while(cont>0){
-			pos = (laps-cont)*cnt*bsz;
-			c0appz_mr(fbuf, idh, idl, pos, bsz, cnt, m0bs);
-			cont--;
-			pthread_mutex_lock(&qos_lock);
-			qos_laps_served++;
-			qos_laps_remain--;
-			pthread_mutex_unlock(&qos_lock);
+		if(!mthrd) {
+			while(cont>0){
+				pos = (laps-cont)*cnt*bsz;
+				c0appz_mr(fbuf, idh, idl, pos, bsz, cnt, m0bs);
+				cont--;
+				pthread_mutex_lock(&qos_lock);
+				qos_laps_served++;
+				qos_laps_remain--;
+				pthread_mutex_unlock(&qos_lock);
+			}
 		}
+		else {
+			pos = 0;
+			for(i=0; i<cont; i++) {
+				pack(i,fbuf, idh, idl, pos, bsz, cnt,m0bs);
+				pthread_create(&(wthrd[i]),NULL,&tfunc_c0appz_mr,(void *)(wthrd_blk+i));
+				pos += cnt * bsz;
+			}
+		}
+
+		for(i=0; i<cont; i++) {
+			pthread_join(wthrd[i],NULL);
+		}
+
 		ppf("%8s","read");
 		c0appz_timeout(bsz*cnt*laps);
 		qos_pthread_wait();

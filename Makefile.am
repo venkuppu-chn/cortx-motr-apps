@@ -1,17 +1,20 @@
 #/*
-# * COPYRIGHT 2014 SEAGATE LLC
+# * Copyright (c) 2017-2020 Seagate Technology LLC and/or its Affiliates
 # *
-# * THIS DRAWING/DOCUMENT, ITS SPECIFICATIONS, AND THE DATA CONTAINED
-# * HEREIN, ARE THE EXCLUSIVE PROPERTY OF SEAGATE LLC,
-# * ISSUED IN STRICT CONFIDENCE AND SHALL NOT, WITHOUT
-# * THE PRIOR WRITTEN PERMISSION OF SEAGATE TECHNOLOGY LIMITED,
-# * BE REPRODUCED, COPIED, OR DISCLOSED TO A THIRD PARTY, OR
-# * USED FOR ANY PURPOSE WHATSOEVER, OR STORED IN A RETRIEVAL SYSTEM
-# * EXCEPT AS ALLOWED BY THE TERMS OF SEAGATE LICENSES AND AGREEMENTS.
+# * Licensed under the Apache License, Version 2.0 (the "License");
+# * you may not use this file except in compliance with the License.
+# * You may obtain a copy of the License at
 # *
-# * YOU SHOULD HAVE RECEIVED A COPY OF SEAGATE'S LICENSE ALONG WITH
-# * THIS RELEASE. IF NOT PLEASE CONTACT A SEAGATE REPRESENTATIVE
-# * http://www.xyratex.com/contact
+# *     http://www.apache.org/licenses/LICENSE-2.0
+# *
+# * Unless required by applicable law or agreed to in writing, software
+# * distributed under the License is distributed on an "AS IS" BASIS,
+# * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# * See the License for the specific language governing permissions and
+# * limitations under the License.
+# *
+# * For any questions about this software or licensing,
+# * please email opensource@seagate.com or cortx-questions@seagate.com.
 # *
 # * Original author:  Ganesan Umanesan <ganesan.umanesan@seagate.com>
 # * Original creation date: 10-Jan-2017
@@ -24,6 +27,10 @@
 # *
 #*/
 
+AM_FLAGS = @M0_CFLAGS@
+M0_SRC_DIR = @M0_SRC_DIR@
+LFLAGS =
+CFLAGS =
 
 #sudo
 SUDO = sudo
@@ -56,23 +63,25 @@ NODE = $(shell eval uname -n)
 
 #compiler/linker options
 LFLAGS += -lm -lpthread -lrt -lyaml -luuid -lmotr
-CFLAGS += -I. -I/usr/include/motr
-CFLAGS += -D_REENTRANT -D_GNU_SOURCE -DM0_INTERNAL='' -DM0_EXTERN=extern
-CFLAGS += -fno-common -Wall -Werror -Wno-attributes -fno-strict-aliasing
+CFLAGS += -I. -I/usr/include/motr -include config.h
+CFLAGS += -D_REENTRANT -D_GNU_SOURCE -DM0_INTERNAL='' -DM0_EXTERN=extern $(AM_FLAGS)
+CFLAGS += -fno-common -Wall -Werror -Wno-attributes -fno-strict-aliasing 
 CFLAGS += -fno-omit-frame-pointer -g -O2 -Wno-unused-but-set-variable
-CFLAGS += -rdynamic
+CFLAGS += -rdynamic 
 # generate .d dependencies automatically
 CFLAGS += -MP -MD
-IQUOTEDIR := /usr/include/motr
-M0GCCXML2XCODE := m0gccxml2xcode
-ifneq ($(M0_SRC_DIR),)
+
+if M0_SRC_DIR_EXIST
 LFLAGS += -L$(M0_SRC_DIR)/motr/.libs -Wl,-rpath=$(M0_SRC_DIR)/motr/.libs
 CFLAGS += -I$(M0_SRC_DIR) -I$(M0_SRC_DIR)/extra-libs/galois/include
-IQUOTEDIR := $(M0_SRC_DIR)
-M0GCCXML2XCODE := $(M0_SRC_DIR)/xcode/m0gccxml2xcode
+IQUOTEDIR = $(M0_SRC_DIR)
+M0GCCXML2XCODE = $(M0_SRC_DIR)/xcode/m0gccxml2xcode
+else
+IQUOTEDIR = /usr/include/motr
+M0GCCXML2XCODE = m0gccxml2xcode
 endif
 
-SRC = perf.o buffer.o qos.o c0appz.o
+SRC = perf.o buffer.o qos.o c0appz.o dir.o list.o
 SRC_ALL = $(SRC) c0cp.o c0cat.o c0rm.o fgen.o \
 		c0isc_register.o c0isc_demo.o isc_libdemo.o
 
@@ -100,17 +109,17 @@ $(FGEN):
 #dd can have any block size and a random
 #number of blocks, making the file size
 #random
-DDZ := 1032
+DDZ = 1032
 CNT := $(shell expr 100 + $$RANDOM % 1000)
-#CNT := $(shell expr 1024 \* 16)
-#CNT := 1024
+#CNT = $(shell expr 1024 \* 16)
 FSZ := $(shell expr $(DDZ) \* $(CNT))
+
 
 #c0cp block size
 #valid block sizes are: 4KB ~ 32MB
 #4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288,
 #1048576, 2097152, 4194304, 8388608, 16777216, 33554432
-BSZ := 64
+BSZ = 64
 
 test: $(C0CP) $(C0CT) $(C0RM) $(FGEN)
 	$(eval FID1 := $(shell eval ./$(FGEN)))
@@ -119,6 +128,12 @@ test: $(C0CP) $(C0CT) $(C0RM) $(FGEN)
 	$(SUDO) dd if=/dev/urandom of=$(FILE1) bs=$(DDZ) count=$(CNT)
 	@echo "#####"
 	@ls -lh $(FILE1)
+	@echo "#####"
+	$(SUDO) ./$(C0RM) $(FID1) -y
+	sleep 1
+	$(SUDO) ./$(C0RM) $(FID2) -y
+	sleep 1
+	@echo "#####"
 	$(SUDO) ./$(C0CP) $(FID1) $(FILE1) $(BSZ) -p
 	@echo "#####"
 	@ls -la $(FILE1)
@@ -136,16 +151,17 @@ test: $(C0CP) $(C0CT) $(C0RM) $(FGEN)
 	cmp $(FILE1) $(FILE3) || echo "ERROR: Async Test Failed !!"
 	@echo "#####"
 	$(SUDO) ./$(C0RM) $(FID1) -y
+	sleep 1
 	$(SUDO) ./$(C0RM) $(FID2) -y
 
 #yaml
 #bundle trace files for shipment
 yaml:
 	@ls m0trace.* &> /dev/null || (echo "No traces!" && exit 1)
-	@for file in m0trace.*; do					\
+	@for file in m0trace.*; do						\
 		echo $$file;							\
 	ls -lh $$file;								\
-		m0trace -Y -i $$file -o $$file.yml;		\
+		m0trace -Y -i $$file -o $$file.yml;				\
 		ls -lh $$file.yml;						\
 	done
 	tar -jcvf $(TARF) m0trace.*.yml
@@ -171,11 +187,6 @@ sagercf:
 	mkdir -p $(RCDIR)/${C0RM}rc
 	mkdir -p $(RCDIR)/$(ISC_REG)rc
 	mkdir -p $(RCDIR)/$(ISC_INVK)rc
-#	$(APPASSIGN) ganesan $(C0CP) 172.18.1.${c} > $(RCDIR)/$(C0CP)rc/client-${c}
-#	$(APPASSIGN) ganesan $(C0CT) 172.18.1.${c} > $(RCDIR)/$(C0CT)rc/client-${c}
-#	$(APPASSIGN) ganesan $(C0RM) 172.18.1.${c} > $(RCDIR)/$(C0RM)rc/client-${c}
-#	$(APPASSIGN) ganesan $(C0CP) 172.18.1.${c} > $(RCDIR)/$(ISC_REG)rc/client-${c}
-#	$(APPASSIGN) ganesan $(C0CT) 172.18.1.${c} > $(RCDIR)/$(ISC_INVK)rc/client-${c}
 	HOSTNAME=$(NODE) ./scripts/motraddr.sh > out-$(HOSTNAME).txt
 	@echo "#####"
 	cat ./out-$(HOSTNAME).txt
@@ -186,8 +197,40 @@ sagercf:
 	cp out-$(HOSTNAME).txt $(RCDIR)/$(ISC_REG)rc/$(NODE)
 	cp out-$(HOSTNAME).txt $(RCDIR)/$(ISC_INVK)rc/$(NODE)
 	rm -rf out-$(HOSTNAME).txt
+
+sagercf-nocache:
+	mkdir -p $(RCDIR)/${C0CP}rc
+	mkdir -p $(RCDIR)/${C0CT}rc
+	mkdir -p $(RCDIR)/${C0RM}rc
+	mkdir -p $(RCDIR)/$(ISC_REG)rc
+	mkdir -p $(RCDIR)/$(ISC_INVK)rc
+	HOSTNAME=$(NODE) ./scripts/motraddr.sh -x > out-$(HOSTNAME).txt
+	@echo "#####"
+	cat ./out-$(HOSTNAME).txt
+	@echo "#####"
+	cp out-$(HOSTNAME).txt $(RCDIR)/$(C0CP)rc/$(NODE)
+	cp out-$(HOSTNAME).txt $(RCDIR)/$(C0CT)rc/$(NODE)
+	cp out-$(HOSTNAME).txt $(RCDIR)/$(C0RM)rc/$(NODE)
+	cp out-$(HOSTNAME).txt $(RCDIR)/$(ISC_REG)rc/$(NODE)
+	cp out-$(HOSTNAME).txt $(RCDIR)/$(ISC_INVK)rc/$(NODE)
+	rm -rf out-$(HOSTNAME).txt
+
+install-exec-local:
+	mkdir -p $(HOME)/bin
+	cp $(C0CP) $(HOME)/bin/
+	cp $(C0CT) $(HOME)/bin/
+	cp $(C0RM) $(HOME)/bin/
+	cp $(FGEN) $(HOME)/bin/
+
+
+uninstall-local:
+	rm $(HOME)/bin/$(C0CP)
+	rm $(HOME)/bin/$(C0CT)
+	rm $(HOME)/bin/$(C0RM)
+	rm $(HOME)/bin/$(FGEN)
+	rmdir -p $(HOME)/bin
 	
-clean: isc-clean
+clean-local: isc-clean
 	rm -f $(C0CP) $(C0CT) $(C0RM) m0trace.*
 	rm -f $(FILE1) $(FILE2) $(FILE3)
 	rm -f $(FGEN)
@@ -259,21 +302,21 @@ $(ISC_INVK): c0isc_demo.o isc/libdemo_xc.o $(SRC)
 
 c0isc_demo.c: isc/libdemo_xc.h
 
-ifneq ($(shell which castxml),)
-CXXXML := castxml
-CXXXML_FLAGS := --castxml-gccxml
-CXXXML_OUTPUT := -o # keep trailing blank-space after -o
-CXXXML2XC_FLAGS := --castxml
+if CASTXML
+CXXXML = castxml
+CXXXML_FLAGS = --castxml-gccxml
+CXXXML_OUTPUT = -o # keep trailing blank-space after -o
+CXXXML2XC_FLAGS = --castxml
 else
-CXXXML := gccxml
+CXXXML = gccxml
 # set maximum supported gcc version by gccxml, currently it's 4.2
-CXXXML_FLAGS := -DGCC_VERSION=4002 -DENABLE_GCCXML
-CXXXML_OUTPUT := -fxml=
-CXXXML2XC_FLAGS :=
+CXXXML_FLAGS = -DGCC_VERSION=4002 -DENABLE_GCCXML
+CXXXML_OUTPUT = -fxml=
+CXXXML2XC_FLAGS =
 endif
 
-CXXXML_UNSUPPORTED_CFLAGS := -Wno-unused-but-set-variable -Werror -Wno-trampolines -rdynamic --coverage -pipe -Wp,-D_FORTIFY_SOURCE=2 --param=ssp-buffer-size=4 -grecord-gcc-switches -fstack-protector-strong -fstack-clash-protection -MD -MP
-CXXXML_CFLAGS := $(filter-out $(CXXXML_UNSUPPORTED_CFLAGS), $(CFLAGS))
+CXXXML_UNSUPPORTED_CFLAGS = -Wno-portability  -Wno-unused-but-set-variable -Werror -Wno-trampolines -rdynamic --coverage -pipe -Wp,-D_FORTIFY_SOURCE=2 --param=ssp-buffer-size=4 -grecord-gcc-switches -fstack-protector-strong -fstack-clash-protection -MD -MP -include config.h
+CXXXML_CFLAGS = $(filter-out $(CXXXML_UNSUPPORTED_CFLAGS), $(CFLAGS))
 
 %_xc.h %_xc.c: %.h
 	$(CXXXML) $(CXXXML_FLAGS) $(CXXXML_CFLAGS) $(CXXXML_OUTPUT)$(<:.h=.gccxml) $<

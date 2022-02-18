@@ -123,7 +123,7 @@ static size_t write_data_to_file(FILE *fp, struct m0_bufvec *data,
 struct m0_realm uber_realm;
 unsigned unit_size = 0;
 int perf=0;				/* performance option 		*/
-extern int qos_total_weight; 		/* total bytes read or written 	*/
+extern int64_t qos_total_weight; 		/* total bytes read or written 	*/
 extern pthread_mutex_t qos_lock;	/* lock  qos_total_weight 	*/
 int trace_level=0;
 bool m0trace_on = false;
@@ -419,6 +419,7 @@ int c0appz_cp(uint64_t idhi, uint64_t idlo, char *filename,
 
 		/* QOS */
 		pthread_mutex_lock(&qos_lock);
+		qos_objio_signal_start();
 		qos_total_weight += cnt_per_op * bsz;
 		pthread_mutex_unlock(&qos_lock);
 		/* END */
@@ -518,6 +519,7 @@ int c0appz_cp_async(uint64_t idhi, uint64_t idlo, char *src, uint64_t bsz,
 
 			/* QOS */
 			pthread_mutex_lock(&qos_lock);
+			qos_objio_signal_start();
 			qos_total_weight += cnt_per_op * bsz;
 			pthread_mutex_unlock(&qos_lock);
 			/* END */
@@ -618,6 +620,7 @@ int c0appz_cat(uint64_t idhi, uint64_t idlo, char *filename,
 
 		/* QOS */
 		pthread_mutex_lock(&qos_lock);
+		qos_objio_signal_start();
 		qos_total_weight += cnt_per_op * bsz;
 		pthread_mutex_unlock(&qos_lock);
 		/* END */

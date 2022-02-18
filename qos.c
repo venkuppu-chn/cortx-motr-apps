@@ -28,13 +28,15 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <pthread.h>
+#include "c0appz.h"
 
 /*
  ******************************************************************************
  * GLOBAL VARIABLES
  ******************************************************************************
  */
-int qos_total_weight=0; 	/* total bytes read or written in a second 	*/
+int64_t  qos_total_weight=0; 	/* total bytes read or written in a second 	*/
+int qos_objio_fstart=0; 	/* flag to indicate the first object IO 	*/
 pthread_mutex_t qos_lock=PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t qos_cond;
 uint64_t qos_whgt_served=0;
@@ -121,6 +123,18 @@ int qos_pthread_cond_signal()
     return 0;
 }
 
+/* qos_objio_signal_start() */
+int qos_objio_signal_start()
+{
+	if(!perf) return 0;
+	if(!qos_objio_fstart) {
+		c0appz_timein();
+		pthread_cond_signal(&qos_cond);
+		qos_objio_fstart = 1;
+	}
+    return 0;
+}
+
 /*
  ******************************************************************************
  * STATIC FUNCTIONS
@@ -141,14 +155,16 @@ static int qos_print_bw(void)
 
 	/* reset total weight */
 	pthread_mutex_lock(&qos_lock);
-	qos_whgt_served += qos_total_weight;
-	qos_whgt_remain -= qos_total_weight;
+	qos_whgt_served += (uint64_t)qos_total_weight;
+	qos_whgt_remain -= (uint64_t)qos_total_weight;
 	qos_total_weight=0;
 	pthread_mutex_unlock(&qos_lock);
 
 	/* print */
 	pr=100*qos_whgt_served/(qos_whgt_served+qos_whgt_remain);
-	printf("bw = %08.4f MB/s\n",bw);
+	printf("bw = %08.4f MB/s\t",bw);
+	printf("%16" PRIu64 " " "%16" PRIu64, qos_whgt_remain,qos_whgt_served);
+	printf("\n");
 	sprintf(s,"%02d/%02d",(int)qos_laps_served,(int)(qos_laps_served+qos_laps_remain));
 	progress_rt(s);
 	sprintf(s,"%3d%%",(int)pr);
@@ -172,6 +188,9 @@ static void *disp_realtime_bw(void *arg)
 {
     while(1)
     {
+    	pthread_mutex_lock(&qos_lock);
+    	while(!qos_objio_fstart) pthread_cond_wait(&qos_cond, &qos_lock);
+    	pthread_mutex_unlock(&qos_lock);
         qos_print_bw();
         if(qos_whgt_remain<=0){
         	qos_pthread_cond_signal(); 	/* signal first	*/
